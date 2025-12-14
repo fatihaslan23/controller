@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listPorts: () => ipcRenderer.invoke('serial:listPorts'),
     connectSerial: (portPath, baudRate) => ipcRenderer.invoke('serial:connect', portPath, baudRate),
     sendGcode: (data) => ipcRenderer.invoke('serial:sendGcode', data),
+    // Bağlantı kesme işlevi
+    disconnectSerial: () => ipcRenderer.invoke('serial:disconnect'),
     
     // Akış Başlatma/Durdurma
     startStream: (gcodeContent) => ipcRenderer.invoke('serial:startStream', gcodeContent),

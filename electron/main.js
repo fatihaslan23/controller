@@ -39,6 +39,11 @@ function setupIpcListeners() {
     ipcMain.handle('serial:sendGcode', async (event, data) => {
         return serialAdapter.sendData(data);
     });
+    
+    // Bağlantıyı Kesme
+    ipcMain.handle('serial:disconnect', async (event) => {
+        return serialAdapter.disconnect();
+    });
 
     // ----------------------------------------------------
     // G-CODE AKIŞ KONTROLÜ (KRİTİK BÖLÜM)
