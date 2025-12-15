@@ -1,251 +1,167 @@
 // src/index.js
 import { h, render } from 'preact';
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState, useCallback, useEffect, useRef } from 'preact/hooks';
 import ConnectModal from './ConnectModal';
-import MoveControl from './MoveControl'; 
-import StreamManager from './StreamManager'; 
-import GCodeEditor from './GCodeEditor'; 
-import GCodePreview3D from './GCodePreview3D'; // 3D alanı bu düzenlemede şimdilik kaldırıldı/yer değiştirildi
+import MoveControl from './MoveControl';
+import StreamManager from './StreamManager';
+import GCodeEditor from './GCodeEditor';
+import PreparePanel from './PreparePanel';
 
-// Tema Renkleri
-const COLOR_PRIMARY_BG = '#2c3e50'; 
-const COLOR_PANEL_BG = '#3a4d61'; 
-const COLOR_LIGHT_TEXT = '#ecf0f1';
-const COLOR_SECONDARY_TEXT = '#bdc3c7'; 
-const COLOR_INPUT_BG = '#2c3e50'; 
+const THEME = {
+    HEADER_BG: 'linear-gradient(90deg, #4e54c8 0%, #8f94fb 100%)',
+    BODY_BG: '#f0f2f5',
+    PANEL_BG: 'rgba(255, 255, 255, 0.85)',
+    TEXT_MAIN: '#1a1a1a', 
+    BORDER_RADIUS: '12px',
+    SHADOW: '0 4px 24px rgba(0,0,0,0.06)'
+};
 
-// Global stil iyileştirmesi
-const globalStyle = { 
+const globalStyle = {
     body: {
-        margin: 0,
-        padding: 0,
-        fontFamily: 'Arial, sans-serif',
-        // KRİTİK: Gradyan Arkaplan
-        background: `linear-gradient(135deg, ${COLOR_PRIMARY_BG} 0%, #40506e 100%)`, 
-        color: COLOR_LIGHT_TEXT,
-        height: '100vh',
-        overflow: 'hidden'
+        margin: 0, padding: 0,
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+        backgroundColor: THEME.BODY_BG, color: THEME.TEXT_MAIN,
+        height: '100vh', overflow: 'hidden', backdropFilter: 'blur(20px)',
     },
-    '#app': {
-        height: '100%',
-    },
-    // Tüm paneller için ortak stil
+    '#app': { height: '100%' },
     panel: {
-        backgroundColor: COLOR_PANEL_BG, 
-        borderRadius: '8px',
-        boxShadow: '0 4px 10px rgba(0, 0, 0, 0.2)',
-        padding: '15px',
-        color: COLOR_LIGHT_TEXT,
-        height: '100%',
-        boxSizing: 'border-box',
-        display: 'flex',
-        flexDirection: 'column',
+        backgroundColor: '#ffffff', borderRadius: THEME.BORDER_RADIUS, boxShadow: THEME.SHADOW,
+        height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column',
+        overflow: 'hidden', border: '1px solid rgba(0,0,0,0.05)',
+    },
+    panelHeader: {
+        padding: '16px 20px', borderBottom: '1px solid rgba(0,0,0,0.05)', fontSize: '15px', fontWeight: '700',
+        color: '#1c1c1e', backgroundColor: 'rgba(255,255,255,0.95)', display: 'flex', justifyContent: 'space-between', alignItems: 'center'
     }
 };
 
-if (typeof document !== 'undefined') {
-    Object.keys(globalStyle).forEach(selector => {
-        if (selector === 'body') {
-            Object.assign(document.body.style, globalStyle.body);
-        } else if (selector === '#app') {
-            const app = document.getElementById('app');
-            if(app) Object.assign(app.style, globalStyle['#app']);
-        }
-    });
-}
+if (typeof document !== 'undefined') Object.assign(document.body.style, globalStyle.body);
 
+// --- TERMINAL PANELİ ---
+const TerminalPanel = ({ logs, onSendCommand }) => {
+    const [command, setCommand] = useState('');
+    const logsEndRef = useRef(null);
 
+    useEffect(() => {
+        if (logsEndRef.current) logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }, [logs]);
+
+    const handleSend = () => {
+        if (!command.trim()) return;
+        onSendCommand(command);
+        setCommand('');
+    };
+
+    return (
+        <div style={globalStyle.panel}>
+            <div style={globalStyle.panelHeader}><span>_ Terminal</span></div>
+            <div style={{ flex: 1, overflowY: 'auto', padding: '12px', fontSize: '12px', fontFamily: "'Menlo', monospace", backgroundColor: '#f8f9fa' }}>
+                {logs.map((line, i) => (
+                    <div key={i} style={{ 
+                        borderBottom: '1px solid #eee', padding: '4px 0', whiteSpace: 'pre-wrap',
+                        color: line.startsWith('>') ? '#007aff' : (line.includes('error') || line.includes('Error') ? '#ff3b30' : '#333')
+                    }}>
+                        {line}
+                    </div>
+                ))}
+                <div ref={logsEndRef} />
+            </div>
+            <div style={{ padding: '12px', borderTop: '1px solid rgba(0,0,0,0.05)', display: 'flex', backgroundColor: '#fff' }}>
+                <input 
+                    type="text" value={command} onInput={e => setCommand(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleSend()}
+                    placeholder="G-code gönder..."
+                    style={{ flex: 1, padding: '10px', border: '1px solid #e5e5ea', borderRadius: '8px', outline: 'none', backgroundColor:'#f2f2f7' }}
+                />
+                <button onClick={handleSend} style={{ marginLeft: '10px', padding: '0 20px', backgroundColor: '#007aff', color: '#fff', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: '600' }}>Send</button>
+            </div>
+        </div>
+    );
+};
+
+// --- ANA UYGULAMA ---
 const App = () => {
-    // ... (State Tanımlamaları ve Bağlantı Mantıkları Aynı Kalır)
     const [isConnected, setIsConnected] = useState(false);
     const [consoleOutput, setConsoleOutput] = useState([]);
-    const [connectionInfo, setConnectionInfo] = useState({ portPath: 'Bilinmiyor', baudRate: 'Bilinmiyor' }); 
+    const [connectionInfo, setConnectionInfo] = useState({ portPath: '', baudRate: '' });
     const [gcodeContent, setGcodeContent] = useState('');
-    const [isStreaming, setIsStreaming] = useState(false); 
-    const [currentLine, setCurrentLine] = useState(0); 
+    const [isStreaming, setIsStreaming] = useState(false);
+    const [currentLine, setCurrentLine] = useState(0);
 
-    const logMessage = useCallback((message) => {
-        setConsoleOutput(prev => [...prev.slice(-199), message]);
+    // Sadece gelen veriyi loglar
+    const logMessage = useCallback((msg) => {
+        if (!msg) return;
+        setConsoleOutput(prev => [...prev.slice(-299), msg]);
     }, []);
 
     const handleConnect = (info) => {
         setConnectionInfo(info);
         setIsConnected(true);
-        // ... (Diğer Bağlantı Mantıkları)
-        if (window.electronAPI && window.electronAPI.onData) {
-            window.electronAPI.onData(logMessage);
-        }
-        if (window.electronAPI && window.electronAPI.onProgress) {
-             window.electronAPI.onProgress(setCurrentLine); 
-        }
-    }
-    
-    const handleDisconnect = async () => {
-        // ... (Aynı Kalır)
-        if (!window.electronAPI || !window.electronAPI.disconnectSerial) {
-             logMessage('[HATA] Bağlantı kesme API\'ı eksik.');
-             return;
-        }
-        try {
-            if (isStreaming) {
-                await window.electronAPI.stopStream();
-                setIsStreaming(false);
-            }
-            await window.electronAPI.disconnectSerial();
-            setIsConnected(false);
-            setConnectionInfo({ portPath: 'Bilinmiyor', baudRate: 'Bilinmiyor' });
-            setGcodeContent(''); 
-            setConsoleOutput(prev => [...prev, '[Sistem] Bağlantı başarıyla kesildi.']);
-        } catch (error) {
-            logMessage(`[HATA] Bağlantı kesilemedi: ${error.message}`);
-        }
-    }
-
-
-    // Terminal Bileşeni (Panel 3)
-    const TerminalPanel = () => {
-        const [command, setCommand] = useState('M115');
-        
-        const sendCommand = async () => {
-            if (!window.electronAPI || !window.electronAPI.sendGcode) return;
-            logMessage(`[GÖNDERİLİYOR] ${command}`);
-            try {
-                await window.electronAPI.sendGcode(command);
-            } catch (error) {
-                logMessage(`[HATA] Komut gönderilemedi: ${error.message}`);
-            }
-            setCommand('');
-        };
-        
-        return (
-            <div style={{ ...globalStyle.panel, padding: '10px' }}>
-                <h3 style={{ margin: '0', padding: '0 0 10px 0', borderBottom: '1px solid #4a637d', fontWeight: '500', fontSize: '16px' }}>_Terminal</h3>
-                
-                <div style={{ flexGrow: 1, overflowY: 'scroll', padding: '5px', marginBottom: '10px', fontSize: '12px', whiteSpace: 'pre-wrap', backgroundColor: globalStyle.INPUT_BG, borderRadius: '4px' }}>
-                    {consoleOutput.map((line, i) => <div key={i}>{line}</div>)}
-                </div>
-
-                <div style={{ display: 'flex', marginTop: 'auto' }}>
-                    <input 
-                        type="text" 
-                        value={command} 
-                        onInput={(e) => setCommand(e.target.value)} 
-                        onKeyDown={(e) => { if (e.key === 'Enter') sendCommand(); }}
-                        placeholder="Enter command" 
-                        disabled={isStreaming}
-                        style={{ flex: 1, padding: '8px', border: '1px solid #4a637d', borderRadius: '4px', backgroundColor: globalStyle.LIGHT_TEXT, color: '#333' }}
-                    />
-                    <button onClick={sendCommand} disabled={isStreaming} style={{ padding: '8px 15px', marginLeft: '10px', backgroundColor: '#3498db', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Gönder</button>
-                </div>
-            </div>
-        );
     };
 
-    // Prepare Panel Yer Tutucu (Panel 4 Alt Kısım)
-    const PreparePanel = () => (
-         <div style={{ ...globalStyle.panel, padding: '15px' }}>
-             <h3 style={{ margin: '0 0 15px 0', borderBottom: '1px solid #4a637d', paddingBottom: '10px', fontWeight: '500' }}>Prepare For Printing</h3>
-             {/* İçerik akışı kilit alanları (Görseldeki gibi) */}
-             <div style={{ padding: '10px', backgroundColor: globalStyle.INPUT_BG, borderRadius: '4px', color: globalStyle.SECONDARY_TEXT, fontSize: '14px' }}>
-                 <p style={{ margin: 0 }}>MIXE RATIO</p>
-                 <p style={{ margin: '5px 0 0 0' }}>RAM EXTRUDER (DEPO-ÇAMUR HAZNESİ)</p>
-                 <p style={{ margin: '5px 0 0 0' }}>CLAY EXTRUDER (KİL EKSTRUDER-BASKI KAFASI)</p>
-             </div>
-         </div>
-    );
-    
-    // Ana Panel Yapısı (Görseldeki 4 Eşit Sütunlu Düzen)
-    const ControlPanel = () => {
-        const totalLines = gcodeContent ? gcodeContent.split('\n').length : 0;
-        const currentProgress = isStreaming && totalLines > 0 ? Math.floor((currentLine / totalLines) * 100) : 0;
-        
-        return (
-            <div style={{ padding: '15px', height: '100%', boxSizing: 'border-box', display: 'flex', flexDirection: 'column' }}>
-                
-                {/* HEADER (Üst Menü Çubuğu) */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', paddingBottom: '10px', borderBottom: '2px solid #34495e' }}>
-                    <div style={{ display: 'flex', alignItems: 'center' }}>
-                        <h1 style={{ margin: '0 20px 0 0', fontSize: '24px', color: globalStyle.LIGHT_TEXT }}>ROOTCLAY CONTROLLER</h1>
-                        <button style={{ padding: '8px 15px', backgroundColor: '#c0392b', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Emergency Stop</button>
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', fontSize: '14px', color: globalStyle.SECONDARY_TEXT }}>
-                        <p style={{ margin: '0 20px 0 0' }}>Port: {connectionInfo.portPath}</p>
-                        <button 
-                            onClick={handleDisconnect} 
-                            disabled={!isConnected}
-                            style={{ padding: '8px 15px', backgroundColor: '#2980b9', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
-                        >
-                            Bağlantıyı Kes
-                        </button>
-                    </div>
-                </div>
+    useEffect(() => {
+        if (isConnected && window.electronAPI) {
+            const removeData = window.electronAPI.onData((data) => {
+                if(data) logMessage(data.toString());
+            });
+            const removeProgress = window.electronAPI.onProgress(setCurrentLine);
+            return () => { if(removeData) removeData(); if(removeProgress) removeProgress(); };
+        }
+    }, [isConnected, logMessage]);
 
-                {/* MAIN CONTENT (4 Eşit Dikey Panel) */}
-                <div style={{ flexGrow: 1, display: 'flex', gap: '15px', minHeight: '0' }}>
-                    
-                    {/* PANEL 1: FILES (Görseldeki gibi) */}
-                    <div style={{ flex: 1, ...globalStyle.panel }}>
-                        <h3 style={{ margin: '0 0 15px 0', borderBottom: '1px solid #4a637d', paddingBottom: '10px', fontWeight: '500' }}>_Files</h3>
+    // Komutu sadece gönderir, loglamaz (Loglama işi Backend Echo ile yapılır)
+    const sendGcodeCommand = (cmd) => {
+        if (window.electronAPI) {
+            window.electronAPI.sendGcode(cmd);
+        }
+    };
+
+    if (!isConnected) return <ConnectModal onConnect={handleConnect} />;
+
+    const totalLines = gcodeContent ? gcodeContent.split('\n').length : 0;
+    const currentProgress = totalLines > 0 ? Math.floor((currentLine / totalLines) * 100) : 0;
+
+    return (
+        <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+            {/* HEADER */}
+            <div style={{ background: THEME.HEADER_BG, padding: '10px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', color: '#fff', boxShadow: '0 2px 10px rgba(0,0,0,0.1)' }}>
+                <div style={{ fontWeight: 'bold', fontSize: '20px' }}>ROOTCLAY <span style={{ opacity: 0.8, fontSize: '12px' }}>CONTROLLER</span></div>
+                <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+                    <span style={{ fontSize: '13px', fontWeight:'500' }}>{connectionInfo.portPath}</span>
+                    <button style={{ backgroundColor: '#ff3b30', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '6px', fontWeight: 'bold', cursor: 'pointer' }}>STOP</button>
+                </div>
+            </div>
+
+            {/* CONTENT GRID */}
+            <div style={{ flex: 1, padding: '20px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '20px', minHeight: 0, backgroundColor: '#f0f2f5' }}>
+                <div style={globalStyle.panel}>
+                    <div style={globalStyle.panelHeader}><span>Files</span> <span style={{fontSize:'12px', color:'#007aff'}}>{currentProgress}%</span></div>
+                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '15px', gap: '15px', overflow: 'hidden' }}>
                         <StreamManager 
-                            onMessage={logMessage} 
-                            onGcodeLoaded={setGcodeContent} 
-                            gcodeContent={gcodeContent}
-                            isStreaming={isStreaming}
-                            setIsStreaming={setIsStreaming}
-                            currentProgress={currentProgress}
-                            currentLine={currentLine}
+                            onMessage={logMessage} onGcodeLoaded={setGcodeContent} 
+                            gcodeContent={gcodeContent} isStreaming={isStreaming} 
+                            setIsStreaming={setIsStreaming} currentProgress={currentProgress} currentLine={currentLine}
                         />
-                         {/* GCode Editörü (Liste Görünümü) */}
-                        <div style={{ flexGrow: 1, marginTop: '10px', minHeight: '100px', display: 'flex', flexDirection: 'column' }}>
-                            <h4 style={{ margin: '5px 0', fontSize: '14px', color: globalStyle.SECONDARY_TEXT }}>G-code İçeriği (Satır: {totalLines})</h4>
-                            <GCodeEditor 
-                                content={gcodeContent}
-                                onContentChange={setGcodeContent}
-                                startLine={currentLine}
-                                totalLines={totalLines}
-                                isStreaming={isStreaming}
-                            />
-                        </div>
-                    </div>
-
-                    {/* PANEL 2: TUNE & MOVE (Görseldeki gibi) */}
-                    <div style={{ flex: 1, ...globalStyle.panel }}>
-                        <h3 style={{ margin: '0 0 15px 0', borderBottom: '1px solid #4a637d', paddingBottom: '10px', fontWeight: '500' }}>_TUNE & MOVE</h3>
-                        <MoveControl onMessage={logMessage} />
-                    </div>
-                    
-                    {/* PANEL 3: TERMINAL (Görseldeki gibi) */}
-                    <div style={{ flex: 1, minHeight: '30%' }}>
-                        <TerminalPanel />
-                    </div>
-
-                    {/* PANEL 4: PREPARE FOR PRINTING (Görseldeki gibi) */}
-                    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                        {/* Üst Kısım Prepare */}
-                        <div style={{ flex: 1 }}>
-                            <PreparePanel />
-                        </div>
-                        
-                         {/* Alt Kısım 3D Preview (Bu görselde 3D alt kısımdadır, o yüzden buraya yerleştirildi) */}
-                        <div style={{ flex: 1, ...globalStyle.panel }}>
-                            <h3 style={{ margin: '0 0 15px 0', borderBottom: '1px solid #4a637d', paddingBottom: '10px', fontWeight: '500' }}>3D Preview</h3>
-                            <GCodePreview3D gcodeContent={gcodeContent} />
+                        <div style={{ flex: 1, border: '1px solid #e5e5ea', borderRadius: '8px', overflow: 'hidden', backgroundColor: '#1e1e1e' }}>
+                            <GCodeEditor content={gcodeContent} startLine={currentLine} totalLines={totalLines} isStreaming={isStreaming} />
                         </div>
                     </div>
                 </div>
-            </div>
-        );
-    };
 
-    if (!isConnected) {
-        return (
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '100vh', backgroundColor: globalStyle.MAIN_BG }}>
-                <ConnectModal onConnect={handleConnect} />
-            </div>
-        );
-    }
+                <div style={globalStyle.panel}>
+                    <div style={globalStyle.panelHeader}><span>TUNE & MOVE</span></div>
+                    <MoveControl onMessage={logMessage} />
+                </div>
 
-    return <ControlPanel />;
+                <TerminalPanel logs={consoleOutput} onSendCommand={sendGcodeCommand} />
+
+                <div style={globalStyle.panel}>
+                    <div style={globalStyle.panelHeader}><span>Prepare For Printing</span></div>
+                    <PreparePanel onSendCommand={sendGcodeCommand} />
+                </div>
+            </div>
+        </div>
+    );
 };
 
 render(<App />, document.getElementById('app'));
