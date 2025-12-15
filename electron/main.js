@@ -1,7 +1,11 @@
-// electron/main.js (TAM KOD)
+// electron/main.js
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
-const serialAdapter = require('./SerialAdapter'); 
+const serialAdapter = require('./SerialAdapter');
+const wifi = require('node-wifi');
+
+// Wi-Fi modülünü başlat
+wifi.init({ iface: null });
 
 let mainWindow;
 
@@ -9,73 +13,70 @@ function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1280,
         height: 800,
+        show: false,
         webPreferences: {
             nodeIntegration: false, 
             contextIsolation: true, 
+            // ------------------------------------------
+            // !!! KRİTİK AYAR: BU SATIR EKLENMELİ !!!
+            webviewTag: true, 
+            // ------------------------------------------
             preload: path.join(__dirname, 'preload.js') 
         }
     });
 
     const startUrl = process.env.ELECTRON_START_URL || `file://${path.join(__dirname, '../src/index.html')}`;
-    
     mainWindow.loadURL(startUrl);
+    
+    mainWindow.once('ready-to-show', () => {
+        mainWindow.maximize(); 
+        mainWindow.show();
+    });
 
-    // Global olarak erişilebilir yap, böylece SerialAdapter veri gönderebilir
     global.mainWindow = mainWindow; 
 }
 
 function setupIpcListeners() {
-    // Port Listeleme
-    ipcMain.handle('serial:listPorts', async (event) => {
-        return serialAdapter.listPorts();
-    });
+    ipcMain.handle('serial:listPorts', async () => serialAdapter.listPorts());
+    ipcMain.handle('serial:connect', async (event, port, baud) => serialAdapter.connect(port, baud));
+    ipcMain.handle('serial:disconnect', async () => serialAdapter.disconnect());
+    ipcMain.handle('serial:sendGcode', async (event, data) => serialAdapter.sendData(data));
+    ipcMain.handle('serial:startStream', async (event, file) => serialAdapter.startStream(file));
+    ipcMain.handle('serial:stopStream', async () => serialAdapter.stopStream());
+    ipcMain.handle('serial:getGcodePreview', async (event, file) => serialAdapter.getGcodePreview(file));
 
-    // Bağlanma
-    ipcMain.handle('serial:connect', async (event, portPath, baudRate) => {
-        return serialAdapter.connect(portPath, baudRate);
-    });
-
-    // Veri Gönderme (Tek Komut)
-    ipcMain.handle('serial:sendGcode', async (event, data) => {
-        return serialAdapter.sendData(data);
-    });
-    
-    // Bağlantıyı Kesme
-    ipcMain.handle('serial:disconnect', async (event) => {
-        return serialAdapter.disconnect();
-    });
-
-    // ----------------------------------------------------
-    // G-CODE AKIŞ KONTROLÜ (KRİTİK BÖLÜM)
-    // ----------------------------------------------------
-    ipcMain.handle('serial:startStream', async (event, gcodeContent) => {
-        // YENİ KRİTİK LOG: Bu kanalın tetiklendiğini teyit edelim
-        console.log(`%c[main] IPC TETİKLENDİ: serial:startStream alındı. Gcode Uzunluğu: ${gcodeContent.length}`, 'color: yellow; font-weight: bold;');
-        
+    // Wi-Fi İşlemleri
+    ipcMain.handle('wifi:get-ssid', async () => {
         try {
-            return serialAdapter.startStream(gcodeContent);
+            const currentConnections = await wifi.getCurrentConnections();
+            if (currentConnections.length > 0) return currentConnections[0].ssid;
+            return null;
         } catch (error) {
-            console.error('[main] startStream Hatası:', error.message);
-            // Renderer sürecine hatayı geri iletir.
-            throw error; 
+            console.error("Wi-Fi SSID Hatası:", error);
+            return null;
         }
     });
 
-    ipcMain.handle('serial:stopStream', async (event) => {
-        return serialAdapter.stopStream();
+    ipcMain.handle('wifi:connect', async (event, { ssid, password }) => {
+        try {
+            console.log(`[WIFI] Tarama...`);
+            await wifi.scan(); 
+            console.log(`[WIFI] ${ssid} ağına bağlanılıyor...`);
+            await wifi.connect({ ssid, password });
+            return { success: true };
+        } catch (error) {
+            console.error("[WIFI] Hata:", error);
+            return { success: false, error: error.message };
+        }
     });
 }
-
 
 app.on('ready', () => {
     createWindow();
     setupIpcListeners(); 
-    // Ana pencere hazır olduğunda başlangıç mesajını gönder
     mainWindow.webContents.on('did-finish-load', () => {
-         mainWindow.webContents.send('serial:data', 'RootClay Serial Controller Başlatıldı.');
+         mainWindow.webContents.send('serial:data', 'RootClay Başlatıldı.');
     });
 });
 
-app.on('window-all-closed', function () {
-  if (process.platform !== 'darwin') app.quit();
-});
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

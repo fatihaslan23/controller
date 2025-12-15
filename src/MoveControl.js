@@ -63,9 +63,23 @@ const actionBtn = {
     boxShadow: '0 2px 4px rgba(0,0,0,0.05)'
 };
 
-// Alt Bileşen
+// Alt Bileşen - Geliştirilmiş Input
 const SettingRow = ({ title, value, onValueChange, onCommit }) => {
     const sliderVal = value === '' ? 100 : parseInt(value);
+
+    // Enter tuşu ve Focus yönetimi
+    const handleKeyDown = (e) => {
+        if (e.key === 'Enter') {
+            onCommit(); // Değeri gönder
+            e.target.select(); // Metni seçili hale getir
+        }
+    };
+
+    const handleFocus = (e) => {
+        e.target.style.backgroundColor = '#fff';
+        e.target.select(); // Tıklandığında da seçsin (Opsiyonel, kullanıcı dostu)
+    };
+
     return (
         <div style={cardStyle}>
             <span style={labelStyle}>{title}</span>
@@ -74,11 +88,12 @@ const SettingRow = ({ title, value, onValueChange, onCommit }) => {
                     <input 
                         type="number" 
                         value={value}
-                        onInput={(e) => onValueChange(e.target.value)} 
+                        onInput={(e) => onValueChange(e.target.value)}
+                        onKeyDown={handleKeyDown} // Enter Dinleyici
+                        onFocus={handleFocus}     // Focus Stili ve Seçim
+                        onBlur={(e) => e.target.style.backgroundColor = '#f2f2f7'}
                         style={inputStyle}
                         placeholder="100"
-                        onFocus={(e) => e.target.style.backgroundColor = '#fff'}
-                        onBlur={(e) => e.target.style.backgroundColor = '#f2f2f7'}
                     />
                     <span style={{ position:'absolute', right:'8px', top:'50%', transform:'translateY(-50%)', fontSize:'12px', color:'#8e8e93', fontWeight:'bold', pointerEvents:'none' }}>%</span>
                 </div>
@@ -102,11 +117,9 @@ const MoveControl = ({ onMessage }) => {
     const [printSpeed, setPrintSpeed] = useState('100');
     const [zStep, setZStep] = useState(1);
 
-    // Merkezi Komut Gönderme Fonksiyonu (Loglama Dahil)
     const executeGcode = (cmd) => {
         if (window.electronAPI) {
             window.electronAPI.sendGcode(cmd);
-            // Eğer onMessage prop'u varsa logla
             if (onMessage) onMessage(`> ${cmd}`);
         }
     };
@@ -133,7 +146,7 @@ const MoveControl = ({ onMessage }) => {
     };
 
     return (
-        <div style={{ padding: '20px', overflowY: 'auto', height: '100%', boxSizing: 'border-box' }}>
+        <div style={{ padding: '20px', overflowY: 'auto', flex: 1, minHeight: 0, boxSizing: 'border-box' }}>
             
             <SettingRow 
                 title="Flow Rate" value={flowRate} onValueChange={setFlowRate} 

@@ -1,29 +1,29 @@
-// electron/SerialAdapter.js (DEBUG MODU)
+// electron/SerialAdapter.js
 const { SerialPort } = require('serialport');
 const { ReadlineParser } = require('@serialport/parser-readline');
-const { BrowserWindow } = require('electron'); 
+const { BrowserWindow } = require('electron');
+const fs = require('fs');
+const readline = require('readline');
 
 let currentPort = null;
 let parser = null;
 
-// State Değişkenleri
-let gcodeLines = []; 
-let totalLines = 0;
-let currentLineIndex = 0;
+// --- AKIŞ KONTROL DEĞİŞKENLERİ ---
 let isStreamingActive = false;
 let isPaused = false;
+let fileStream = null;      // Dosya okuma akışı
+let lineReader = null;      // Satır okuyucu arayüzü
+let lineIterator = null;    // Satırları tek tek çekmek için
+let currentLineCount = 0;   // Gönderilen satır sayısı
+let totalLinesInFile = 0;   // Toplam satır sayısı
 
-// UI Penceresini Bulma (Gelişmiş)
+// UI Penceresini Bulma
 const getMainWindow = () => {
-    // 1. Global değişkeni kontrol et
     if (global.mainWindow && !global.mainWindow.isDestroyed()) {
         return global.mainWindow;
     }
-    // 2. Açık pencereleri tara
     const wins = BrowserWindow.getAllWindows();
     if (wins.length > 0) return wins[0];
-    
-    console.error('[FATAL] Arayüz penceresi bulunamadı! Veri gönderilemiyor.');
     return null;
 };
 
@@ -35,39 +35,16 @@ const sendToUI = (channel, data) => {
     }
 };
 
-// --- G-Code Akış Mantığı ---
-const sendProgress = () => {
-    if (!totalLines) return;
-    const progress = Math.floor((currentLineIndex / totalLines) * 100);
-    sendToUI('stream:progress', progress);
-};
-
-const sendNextLine = () => {
-    if (!isStreamingActive || isPaused || !currentPort || !currentPort.isOpen) {
-        if (currentLineIndex >= totalLines && isStreamingActive) {
-            console.log('[AKIŞ] Tamamlandı.');
-            sendToUI('serial:data', '[Sistem] Baskı Tamamlandı.');
-            isStreamingActive = false;
-            currentLineIndex = 0;
-            sendToUI('stream:completed');
-        }
-        return;
-    }
-    
-    if (currentLineIndex >= totalLines) {
-        isStreamingActive = false;
-        sendToUI('stream:completed');
-        return;
-    }
-
-    let line = gcodeLines[currentLineIndex].trim();
-    while ((line.length === 0 || line.startsWith(';')) && currentLineIndex < totalLines - 1) {
-        currentLineIndex++;
-        line = gcodeLines[currentLineIndex].trim();
-    }
-
-    // Komutu gönder (Ekrana yazmaya gerek yok, zaten Raw Spy yazacak)
-    currentPort.write(line + '\n');
+// --- Yardımcı: Toplam Satır Sayısını Hızlıca Bul (Progress Bar İçin) ---
+const countFileLines = async (filePath) => {
+    return new Promise((resolve, reject) => {
+        let lineCount = 0;
+        const stream = fs.createReadStream(filePath);
+        const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+        rl.on('line', () => { lineCount++; });
+        rl.on('close', () => { resolve(lineCount); });
+        rl.on('error', (err) => { reject(err); });
+    });
 };
 
 const serialAdapter = {
@@ -80,6 +57,21 @@ const serialAdapter = {
         }
     },
 
+    // UI İçin Dosya Önizleme (TÜM DOSYAYI OKUR - SINIRSIZ)
+    async getGcodePreview(filePath) {
+        return new Promise((resolve, reject) => {
+            // fs.readFile tüm dosyayı bir kerede okur. Büyük dosyalar için bellek tüketir ama istenilen budur.
+            fs.readFile(filePath, 'utf8', (err, data) => {
+                if (err) {
+                    reject(err);
+                } else {
+                    resolve(data);
+                }
+            });
+        });
+    },
+
+    // BAĞLANTI FONKSİYONU
     async connect(portPath, baudRate) {
         if (currentPort && currentPort.isOpen) {
             await serialAdapter.disconnect();
@@ -95,41 +87,28 @@ const serialAdapter = {
                 dataBits: 8,
                 stopBits: 1,
                 parity: 'none',
-                rtscts: false, // Yeni ekle
-                dtr: true,     // KRİTİK: Bazı kartların uyanması için şart
-                rts: true      // KRİTİK: Bazı kartlar için şart
+                rtscts: false,
+                dtr: true,
+                rts: true
             });
 
-            // 1. RAW SPY (HAM VERİ AJANI) - SORUNU BU BULACAK
-            // Parser'dan bağımsız olarak kablodan ne gelirse buraya düşer.
-            currentPort.on('data', (chunk) => {
-                // Buffer'ı string'e çevir ve görünmez karakterleri görünür yap
-                const rawStr = chunk.toString();
-                const debugStr = rawStr.replace(/\n/g, '\\n').replace(/\r/g, '\\r');
-                
-                console.log(`[RAW RX] Gelen Ham Veri: "${debugStr}"`); // VS Code Terminaline Yazar
-            });
-
-            // 2. PARSER KURULUMU (GÜVENLİ LİMAN)
-            // Çoğu yazıcı \n kullanır. Marlin bazen \r\n gönderir.
+            // Parser Kurulumu
             parser = currentPort.pipe(new ReadlineParser({ delimiter: '\n' }));
 
             parser.on('data', (data) => {
                 const line = data.trim();
-                console.log(`[PARSER] İşlenen Satır: "${line}"`); // VS Code Terminaline Yazar
                 
-                // UI'ya gönder
-                sendToUI('serial:data', line);
-
-                // Akış kontrolü (ok yanıtı)
+                // Akış Mantığı (Ping-Pong)
                 if (isStreamingActive && !isPaused) {
-                    if (line.startsWith('ok') || line.includes('ok')) {
-                        currentLineIndex++;
-                        sendProgress();
-                        sendNextLine();
+                    // "ok" yanıtını daha sıkı kontrol et (Regex)
+                    if (/^ok\b/.test(line)) { 
+                        serialAdapter.processNextLine();
                     } else if (line.toLowerCase().includes('error')) {
                         console.error('[YAZICI HATA]', line);
+                        sendToUI('serial:data', `[KRİTİK HATA] ${line}`);
                     }
+                } else {
+                    sendToUI('serial:data', line);
                 }
             });
 
@@ -139,21 +118,11 @@ const serialAdapter = {
                     sendToUI('serial:data', `[HATA] ${err.message}`);
                     return reject(err);
                 }
-
-                currentPort.on('error', (err) => {
-                    console.error('[PORT HATA]', err.message);
-                    sendToUI('serial:data', `[PORT HATA] ${err.message}`);
-                });
-
                 console.log('[BAĞLANTI] Başarılı.');
                 sendToUI('serial:data', `[Sistem] Bağlantı kuruldu: ${portPath}`);
                 
-                // Cihazı dürtmek için boş komut
                 setTimeout(() => {
-                    if (currentPort && currentPort.isOpen) {
-                        console.log('[BAĞLANTI] Uyandırma sinyali gönderiliyor...');
-                        currentPort.write('\n');
-                    }
+                    if (currentPort && currentPort.isOpen) currentPort.write('\n');
                 }, 1000);
 
                 resolve(true);
@@ -166,13 +135,8 @@ const serialAdapter = {
             sendToUI('serial:data', '[HATA] Port kapalı.');
             throw new Error("Port kapalı");
         }
-        
-        console.log(`[TX] Gönderiliyor: ${data}`); // Backend Log
-        sendToUI('serial:data', `> ${data}`);      // UI Log (Kullanıcı görsün)
-        
-        currentPort.write(data + '\n', (err) => {
-            if (err) console.error('[TX HATA]', err.message);
-        });
+        sendToUI('serial:data', `> ${data}`);
+        currentPort.write(data + '\n');
     },
 
     async disconnect() {
@@ -188,25 +152,96 @@ const serialAdapter = {
         }
     },
 
-    startStream(gcodeContent) {
-        if (!currentPort || !currentPort.isOpen) throw new Error("Port kapalı");
-        gcodeLines = gcodeContent.split('\n');
-        totalLines = gcodeLines.length;
-        currentLineIndex = 0;
-        isStreamingActive = true;
-        isPaused = false;
-        
-        console.log(`[AKIŞ] Başlatıldı. Toplam: ${totalLines}`);
-        sendToUI('serial:data', `[Sistem] Baskı başlatıldı.`);
-        sendNextLine();
-        return true;
+    // --- AKIŞ MANTIĞI (STREAMING) ---
+    async startStream(filePath) {
+        if (!currentPort || !currentPort.isOpen) throw new Error("Port kapalı. Lütfen önce bağlanın.");
+
+        try {
+            sendToUI('serial:data', '[Sistem] Dosya analiz ediliyor...');
+            
+            totalLinesInFile = await countFileLines(filePath);
+            sendToUI('serial:data', `[Sistem] Analiz tamam. Toplam ${totalLinesInFile} satır basılacak.`);
+
+            fileStream = fs.createReadStream(filePath);
+            lineReader = readline.createInterface({
+                input: fileStream,
+                crlfDelay: Infinity
+            });
+
+            lineIterator = lineReader[Symbol.asyncIterator]();
+            
+            isStreamingActive = true;
+            isPaused = false;
+            currentLineCount = 0;
+
+            console.log(`[AKIŞ] Başlatıldı: ${filePath}`);
+            sendToUI('serial:data', `[Sistem] Baskı başlatılıyor...`);
+            
+            await this.processNextLine();
+            return true;
+        } catch (error) {
+            console.error('Akış başlatma hatası:', error);
+            sendToUI('serial:data', `[Sistem Hata] ${error.message}`);
+            throw error;
+        }
+    },
+
+    async processNextLine() {
+        if (!isStreamingActive || isPaused) return;
+
+        const result = await lineIterator.next();
+
+        if (result.done) {
+            this.finishStream();
+            return;
+        }
+
+        let line = result.value.trim();
+        currentLineCount++;
+
+        if (line.length === 0 || line.startsWith(';')) {
+            return this.processNextLine();
+        }
+
+        const commentIndex = line.indexOf(';');
+        if (commentIndex !== -1) {
+            line = line.substring(0, commentIndex).trim();
+        }
+
+        if (currentPort && currentPort.isOpen) {
+            currentPort.write(line + '\n');
+            if (totalLinesInFile > 0 && currentLineCount % 10 === 0) {
+                const progress = Math.floor((currentLineCount / totalLinesInFile) * 100);
+                sendToUI('stream:progress', progress);
+            }
+        } else {
+            this.stopStream();
+        }
+    },
+
+    finishStream() {
+        console.log('[AKIŞ] Bitti.');
+        isStreamingActive = false;
+        sendToUI('serial:data', '[Sistem] Baskı Başarıyla Tamamlandı.');
+        sendToUI('stream:completed');
+        this.cleanupStreams();
     },
 
     stopStream() {
+        if (!isStreamingActive) return;
         isStreamingActive = false;
         console.log('[AKIŞ] Durduruldu.');
         sendToUI('serial:data', `[Sistem] Baskı durduruldu.`);
+        this.cleanupStreams();
         return true;
+    },
+
+    cleanupStreams() {
+        if (lineReader) lineReader.close();
+        if (fileStream) fileStream.destroy();
+        lineIterator = null;
+        lineReader = null;
+        fileStream = null;
     }
 };
 

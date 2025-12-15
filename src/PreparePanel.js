@@ -18,7 +18,6 @@ const PreparePanel = ({ onSendCommand }) => {
 
     const labelStyle = { display: 'block', fontSize: '11px', fontWeight: '700', color: '#8e8e93', marginBottom: '8px', textTransform: 'uppercase' };
     
-    // Modern input stili
     const inputModern = {
         width: '100%',
         padding: '10px 12px',
@@ -39,7 +38,8 @@ const PreparePanel = ({ onSendCommand }) => {
     };
 
     return (
-        <div style={{ padding: '20px', overflowY: 'auto' }}>
+        // DÜZELTME: flex: 1 ve minHeight: 0 ile ebeveynin kalan yerine sığ ve taşma yaparsa scroll çıkar
+        <div style={{ padding: '20px', overflowY: 'auto', flex: 1, minHeight: 0 }}>
             
             {/* MIXER RATIO CARD */}
             <div style={cardStyle}>
@@ -49,7 +49,6 @@ const PreparePanel = ({ onSendCommand }) => {
                     <span>Ram: <strong>{100 - mixRatio}</strong></span>
                 </div>
                 
-                {/* Custom Slider */}
                 <input 
                     type="range" min="0" max="100" value={mixRatio} 
                     onInput={(e) => setMixRatio(e.target.value)}
